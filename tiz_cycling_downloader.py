@@ -493,17 +493,15 @@ def process_post(session, post, history, dry_run=False):
         logging.info(f"Already in history, skipping: {file_name}")
         return False
 
-    os.makedirs(race_dir, exist_ok=True)
-
     # Extract the direct CDN mp4 URL from the page
     mp4_url = find_mp4_url(session, url)
-    if mp4_url:
-        logging.info(f"Downloading mp4: {mp4_url}")
-        downloaded = download_video(mp4_url, output_path, dry_run)
-    else:
-        # No CDN mp4 — skip (YouTube-hosted videos are not supported)
+    if not mp4_url:
         logging.info(f"No CDN video found, skipping: {title}")
         return False
+
+    logging.info(f"Downloading mp4: {mp4_url}")
+    os.makedirs(race_dir, exist_ok=True)
+    downloaded = download_video(mp4_url, output_path, dry_run)
 
     if downloaded:
         write_nfo(nfo_path, race_info, url, dry_run)
@@ -513,6 +511,13 @@ def process_post(session, post, history, dry_run=False):
             history["downloaded"].append(url)
             save_history(history)
         return True
+
+    # Clean up empty folder on failure
+    try:
+        if os.path.isdir(race_dir) and not os.listdir(race_dir):
+            os.rmdir(race_dir)
+    except OSError:
+        pass
 
     logging.warning(f"Could not download: {title} ({url})")
     return False
