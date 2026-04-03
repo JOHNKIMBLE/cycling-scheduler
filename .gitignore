@@ -28,6 +28,7 @@ Desktop.ini
 !package.json
 cookies.txt
 release.sh
+release.ps1
 test.mp4
 
 # Secrets / credentials
