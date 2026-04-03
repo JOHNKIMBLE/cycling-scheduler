@@ -2,11 +2,13 @@
 
 Auto-download full cycling race videos from [tiz-cycling.tv](https://tiz-cycling.tv) for Plex. Runs on a seedbox or any Linux server with Python 3 and cron.
 
+Default output path: `~/files/sports/Cycling`
+
 ## What it does
 
 - Checks the site's sitemap for new video posts
 - Filters for **full races and full stages only** (skips highlights, last 20km clips, etc.)
-- Downloads the CDN-hosted mp4 directly via yt-dlp
+- Downloads either the Tiz CDN-hosted mp4 or a YouTube embed via yt-dlp
 - Organizes into Plex-friendly folders with `.nfo` metadata and poster art
 - Tracks downloads so it never re-downloads the same video
 - Runs daily via cron, only checking the last N days
@@ -15,13 +17,13 @@ Auto-download full cycling race videos from [tiz-cycling.tv](https://tiz-cycling
 
 ```
 Cycling/
-  E3 Saxo Classic (2026-03-28)/
-    E3 Saxo Classic 2026 - Full Race (2026-03-28).mp4
-    E3 Saxo Classic 2026 - Full Race (2026-03-28).nfo
+  E3 Saxo Classic 2026 - Full Race/
+    E3 Saxo Classic 2026 - Full Race.mp4
+    E3 Saxo Classic 2026 - Full Race.nfo
     poster.jpg
-  Volta Ciclista A Catalunya (2026-03-27)/
-    Volta Ciclista A Catalunya 2026 - Stage 5 (2026-03-27).mp4
-    Volta Ciclista A Catalunya 2026 - Stage 5 (2026-03-27).nfo
+  Volta Ciclista A Catalunya 2026 - Stage 5/
+    Volta Ciclista A Catalunya 2026 - Stage 5.mp4
+    Volta Ciclista A Catalunya 2026 - Stage 5.nfo
     poster.jpg
 ```
 
@@ -33,12 +35,19 @@ cd cycling-scheduler
 bash setup.sh
 ```
 
-This creates a Python venv, installs dependencies, and adds a daily cron job at 6 AM.
+This creates a self-contained install in `~/tiz-downloader` with:
+
+- a Python venv
+- local `yt-dlp` dependencies
+- a local Deno runtime in `~/tiz-downloader/deno`
+- a generated env file at `~/tiz-downloader/tiz-env.sh`
+- a daily cron job at 6 AM
 
 ## Usage
 
 ```bash
 cd ~/tiz-downloader
+. ./tiz-env.sh
 
 # Preview what would download from the last day
 venv/bin/python tiz_cycling_downloader.py --dry-run --since 1
@@ -51,6 +60,10 @@ venv/bin/python tiz_cycling_downloader.py --url 'https://tiz-cycling.tv/video/e3
 
 # Override output directory
 venv/bin/python tiz_cycling_downloader.py --output ~/plex/sports/Cycling --since 1
+
+# Download YouTube-backed races with exported browser cookies
+cp ~/youtube-cookies.txt ~/tiz-downloader/youtube-cookies.txt
+venv/bin/python tiz_cycling_downloader.py --since 1
 ```
 
 ## Options
@@ -59,8 +72,12 @@ venv/bin/python tiz_cycling_downloader.py --output ~/plex/sports/Cycling --since
 |------|---------|-------------|
 | `--since DAYS` | `7` | Only check videos from the last N days |
 | `--dry-run` | off | Preview without downloading |
-| `--output DIR` | `~/media/Cycling` | Output directory for Plex |
+| `--output DIR` | `~/files/sports/Cycling` | Output directory for Plex |
 | `--url URL` | - | Download a single race page |
+| `--cookies FILE` | off | Pass a cookies.txt file through to yt-dlp |
+| `--cookies-from-browser SPEC` | off | Pass a browser profile through to yt-dlp |
+| `--js-runtimes VALUE` | off | Pass JS runtime config through to yt-dlp |
+| `--remote-components VALUE` | off | Pass remote component config through to yt-dlp |
 
 ## Environment variables
 
@@ -68,26 +85,76 @@ Override defaults without CLI flags:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `TIZ_OUTPUT_DIR` | `~/media/Cycling` | Output directory |
+| `TIZ_OUTPUT_DIR` | `~/files/sports/Cycling` | Output directory |
 | `TIZ_HISTORY_FILE` | `~/.tiz_downloaded.json` | Download history |
 | `TIZ_LOG_FILE` | `~/tiz_downloader.log` | Log file path |
+| `TIZ_YTDLP_COOKIES` | unset | cookies.txt passed through to yt-dlp |
+| `TIZ_YTDLP_COOKIES_FROM_BROWSER` | unset | Browser profile passed through to yt-dlp |
+| `TIZ_YTDLP_JS_RUNTIMES` | unset | JS runtime(s) for yt-dlp, e.g. `deno` |
+| `TIZ_YTDLP_REMOTE_COMPONENTS` | unset | Optional yt-dlp remote components, e.g. `ejs:github` |
 
 ## How it works
 
 1. Fetches the WordPress sitemap index from tiz-cycling.tv
 2. Parses the latest video sitemap for entries with `lastmod` dates within the `--since` window
 3. Filters for URLs containing `full-race` or `full-stage` in the slug
-4. For each new race, scrapes the video page to extract the direct CDN mp4 URL
+4. For each new race, scrapes the video page to extract either the direct CDN mp4 URL or an embedded YouTube URL
 5. Downloads via yt-dlp with progress output (interactive) or silently (cron)
 6. Writes Plex `.nfo` sidecar with title, year, genre, air date, and tags
 7. Grabs the `og:image` thumbnail as `poster.jpg`
 
 ## Notes
 
-- Only CDN-hosted videos are downloaded. Some smaller/foreign-language races are YouTube-only and will be skipped.
+- YouTube-backed race pages are supported by extracting the embed URL and handing it to yt-dlp.
+- Some YouTube videos now require cookies and a JS runtime in yt-dlp. If you hit a bot-check error, export a `cookies.txt` file and pass `--cookies ~/youtube-cookies.txt` or set `TIZ_YTDLP_COOKIES`.
+- If YouTube auth is missing or fails, that post is skipped and the script continues. CDN-hosted races will still download normally.
+- `setup.sh` installs a local Deno runtime into the install directory and generates `tiz-env.sh`, so YouTube support no longer depends on shell profile edits.
+- If `~/tiz-downloader/youtube-cookies.txt` exists, the downloader auto-detects it even without `--cookies`.
 - The site uses Cloudflare, so the script warms up cookies and avoids Brotli encoding.
 - Sitemap responses may return HTTP 404 with valid XML content (Cloudflare quirk) - the script handles this.
 - Rate limiting: 1s delay between sitemap requests, 3s between video downloads.
+
+## Easy YouTube setup
+
+If a Tiz page points at YouTube and yt-dlp says `Sign in to confirm you're not a bot`, do this:
+
+1. On your own computer, open a private/incognito browser window.
+2. Log into YouTube in that private window.
+3. In the same tab, open `https://www.youtube.com/robots.txt`.
+4. Export `youtube.com` cookies to a file named `youtube-cookies.txt`.
+5. Copy that file to your seedbox.
+6. Put it at `~/tiz-downloader/youtube-cookies.txt`.
+7. Run the downloader from the install directory after sourcing `tiz-env.sh`.
+
+Example commands:
+
+```bash
+# Copy cookie file from your local computer to the seedbox
+scp ~/Downloads/youtube-cookies.txt treasurefingers@kore:~/youtube-cookies.txt
+
+# On the seedbox, put the cookie file in the install dir and run the downloader
+cd ~/tiz-downloader
+cp ~/youtube-cookies.txt ~/tiz-downloader/youtube-cookies.txt
+. ./tiz-env.sh
+venv/bin/python tiz_cycling_downloader.py --since 1
+```
+
+If you want to test yt-dlp directly with the contained runtime, use:
+
+```bash
+cd ~/tiz-downloader
+. ./tiz-env.sh
+venv/bin/python -m yt_dlp \
+  --cookies ~/tiz-downloader/youtube-cookies.txt \
+  --js-runtimes "deno:$HOME/tiz-downloader/deno/bin/deno" \
+  "https://www.youtube.com/watch?v=kfE6yVr6dnA"
+```
+
+Tips:
+
+- The cookie file must be in Netscape/Mozilla `cookies.txt` format.
+- Keep the cookie file private. It can authenticate you.
+- If downloads start failing again later, export a fresh cookie file and replace the old one.
 
 ## Requirements
 
@@ -100,10 +167,11 @@ Override defaults without CLI flags:
 
 Installed automatically by `setup.sh`:
 
-- [yt-dlp](https://github.com/yt-dlp/yt-dlp) - video download
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp) with the `default` extras - video download and bundled EJS support files
 - [requests](https://docs.python-requests.org/) - HTTP client
 - [beautifulsoup4](https://www.crummy.com/software/BeautifulSoup/) - HTML/XML parsing
 - [lxml](https://lxml.de/) - fast XML parser
+- [Deno](https://deno.com/) installed locally under the install directory for YouTube JS challenge solving
 
 ## License
 

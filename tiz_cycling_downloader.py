@@ -7,13 +7,14 @@ and organizes them in a Plex-friendly folder structure with metadata.
 
 Folder layout:
   Cycling/
-    Race Name (2026-03-28)/
-      Race Name 2026 - Full Race (2026-03-28).mp4
-      Race Name 2026 - Full Race (2026-03-28).nfo
+    Race Name 2026 - Full Race/
+      Race Name 2026 - Full Race.mp4
+      Race Name 2026 - Full Race.nfo
       poster.jpg
 """
 
 import argparse
+import html
 import json
 import logging
 import os
@@ -24,16 +25,35 @@ import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import urljoin, unquote, urlparse, parse_qs
+from urllib.parse import urljoin, unquote, urlparse, parse_qs, urlencode
 
 import requests
 from bs4 import BeautifulSoup
 
 # --- Configuration (override via CLI flags or env vars) ---
+SCRIPT_DIR = Path(__file__).resolve().parent
+
+
+def detect_local_cookie_file():
+    """Use a colocated cookies file when the install is self-contained."""
+    cookie_path = SCRIPT_DIR / "youtube-cookies.txt"
+    return str(cookie_path) if cookie_path.exists() else ""
+
+
+def detect_local_js_runtime():
+    """Use a colocated Deno runtime when available."""
+    deno_path = SCRIPT_DIR / "deno" / "bin" / "deno"
+    return f"deno:{deno_path}" if deno_path.exists() else ""
+
+
 SITE_URL = os.environ.get("TIZ_SITE_URL", "https://tiz-cycling.tv")
-OUTPUT_DIR = os.environ.get("TIZ_OUTPUT_DIR", os.path.expanduser("~/media/Cycling"))
-HISTORY_FILE = os.environ.get("TIZ_HISTORY_FILE", os.path.expanduser("~/.tiz_downloaded.json"))
-LOG_FILE = os.environ.get("TIZ_LOG_FILE", os.path.expanduser("~/tiz_downloader.log"))
+OUTPUT_DIR = os.environ.get("TIZ_OUTPUT_DIR", os.path.expanduser("~/files/sports/Cycling"))
+HISTORY_FILE = os.environ.get("TIZ_HISTORY_FILE", os.path.expanduser("~/tiz-downloader/.tiz_downloaded.json"))
+LOG_FILE = os.environ.get("TIZ_LOG_FILE", os.path.expanduser("~/tiz-downloader/tiz_downloader.log"))
+YTDLP_COOKIES = os.environ.get("TIZ_YTDLP_COOKIES", detect_local_cookie_file())
+YTDLP_COOKIES_FROM_BROWSER = os.environ.get("TIZ_YTDLP_COOKIES_FROM_BROWSER", "")
+YTDLP_JS_RUNTIMES = os.environ.get("TIZ_YTDLP_JS_RUNTIMES", detect_local_js_runtime())
+YTDLP_REMOTE_COMPONENTS = os.environ.get("TIZ_YTDLP_REMOTE_COMPONENTS", "")
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 REQUEST_DELAY = 1.0  # seconds between HTTP requests
 
@@ -350,17 +370,103 @@ def is_full_race(post):
 
 def extract_real_mp4(url):
     """Extract the actual mp4 URL from a video.php?v= wrapper URL."""
+    url = clean_candidate_url(url)
     if "video.php" in url and "v=" in url:
         parsed = urlparse(url)
         params = parse_qs(parsed.query)
         if "v" in params:
-            return params["v"][0]
+            return clean_candidate_url(params["v"][0])
     return url
 
 
-def find_mp4_url(session, page_url):
-    """Try to find a direct CDN mp4 URL from the page source."""
-    logging.info(f"Inspecting page for mp4: {page_url}")
+def clean_candidate_url(url):
+    """Normalize extracted HTML URLs so they can be parsed consistently."""
+    if not url:
+        return ""
+
+    url = html.unescape(url.strip())
+    url = url.strip("'\"")
+    return url.replace("\\/", "/")
+
+
+def is_youtube_url(url):
+    """Return True if the URL points to a YouTube video or embed."""
+    parsed = urlparse(clean_candidate_url(url))
+    host = parsed.netloc.lower()
+    return any(domain in host for domain in ["youtube.com", "youtu.be", "youtube-nocookie.com"])
+
+
+def normalize_youtube_url(url):
+    """Convert embed/short links into a standard watch URL yt-dlp can consume."""
+    url = clean_candidate_url(url)
+    parsed = urlparse(url)
+    host = parsed.netloc.lower()
+    query = parse_qs(parsed.query)
+    video_id = None
+
+    if "youtu.be" in host:
+        video_id = parsed.path.strip("/").split("/")[0]
+    elif "youtube.com" in host or "youtube-nocookie.com" in host:
+        path_parts = [part for part in parsed.path.split("/") if part]
+        if parsed.path == "/watch":
+            video_id = query.get("v", [None])[0]
+        elif len(path_parts) >= 2 and path_parts[0] in {"embed", "shorts", "live"}:
+            video_id = path_parts[1]
+
+    if not video_id:
+        return url
+
+    normalized_query = {"v": video_id}
+
+    start = query.get("start", [None])[0] or query.get("t", [None])[0]
+    if start:
+        normalized_query["t"] = start
+
+    playlist = query.get("list", [None])[0]
+    if playlist:
+        normalized_query["list"] = playlist
+
+    return f"https://www.youtube.com/watch?{urlencode(normalized_query)}"
+
+
+def extract_embedded_video_url(soup, page_url):
+    """Inspect common embed tags and return the first supported video source."""
+    attrs = ("src", "data-src", "data-lazy-src", "href", "content")
+    candidates = []
+    seen = set()
+
+    for tag in soup.find_all(["iframe", "video", "source", "a", "meta"]):
+        for attr in attrs:
+            raw_url = tag.get(attr)
+            if not raw_url:
+                continue
+
+            candidate = clean_candidate_url(urljoin(page_url, raw_url))
+            if not candidate or candidate in seen:
+                continue
+
+            seen.add(candidate)
+            candidates.append(candidate)
+
+    for candidate in candidates:
+        resolved = extract_real_mp4(candidate)
+        if "video.tiz-cycling.io/file/" in resolved or resolved.lower().endswith(".mp4"):
+            logging.info(f"Found CDN video: {resolved}")
+            return resolved
+
+    for candidate in candidates:
+        resolved = extract_real_mp4(candidate)
+        if is_youtube_url(resolved):
+            youtube_url = normalize_youtube_url(resolved)
+            logging.info(f"Found YouTube video: {youtube_url}")
+            return youtube_url
+
+    return None
+
+
+def find_video_url(session, page_url):
+    """Try to find a supported downloadable video URL from the page source."""
+    logging.info(f"Inspecting page for video: {page_url}")
     try:
         resp = session.get(page_url, timeout=30)
     except requests.RequestException as e:
@@ -373,6 +479,11 @@ def find_mp4_url(session, page_url):
         return None
 
     text = resp.text
+    soup = BeautifulSoup(text, "html.parser")
+
+    embedded_url = extract_embedded_video_url(soup, page_url)
+    if embedded_url:
+        return embedded_url
 
     # Method 1: Find CDN direct URL (most reliable)
     marker = "video.tiz-cycling.io/file/"
@@ -406,13 +517,76 @@ def find_mp4_url(session, page_url):
                 return mp4_url
         idx = text.find(".mp4", idx + 4)
 
-    logging.warning("No mp4 URL found in page")
+    # Method 3: Find YouTube embeds/links in raw HTML
+    youtube_match = re.search(
+        r'https?://(?:www\.)?(?:youtube(?:-nocookie)?\.com/(?:embed/|watch\?)[^"\'<>\s]+|youtu\.be/[^"\'<>\s]+)',
+        text,
+        re.IGNORECASE,
+    )
+    if youtube_match:
+        youtube_url = normalize_youtube_url(youtube_match.group(0))
+        logging.info(f"Found YouTube video via search: {youtube_url}")
+        return youtube_url
+
+    logging.warning("No video URL found in page")
     return None
 
 
 # ---------------------------------------------------------------------------
 # Download
 # ---------------------------------------------------------------------------
+
+def build_yt_dlp_cmd(url, output_path):
+    """Build the yt-dlp command with optional YouTube auth/runtime helpers."""
+    cmd = [
+        sys.executable, "-m", "yt_dlp",
+        "--no-check-certificates",
+        "-o", output_path,
+        "--merge-output-format", "mp4",
+        "--no-playlist",
+        "--retries", "1",
+        "--fragment-retries", "1",
+    ]
+
+    cookies_file = os.path.expanduser(YTDLP_COOKIES) if YTDLP_COOKIES else ""
+    if cookies_file:
+        cmd.extend(["--cookies", cookies_file])
+
+    if YTDLP_COOKIES_FROM_BROWSER:
+        cmd.extend(["--cookies-from-browser", YTDLP_COOKIES_FROM_BROWSER])
+
+    if YTDLP_JS_RUNTIMES:
+        cmd.extend(["--js-runtimes", YTDLP_JS_RUNTIMES])
+
+    if YTDLP_REMOTE_COMPONENTS:
+        cmd.extend(["--remote-components", YTDLP_REMOTE_COMPONENTS])
+
+    cmd.append(url)
+    return cmd
+
+
+def log_yt_dlp_failure(stderr_text, url):
+    """Log a more actionable yt-dlp failure message."""
+    stderr_text = (stderr_text or "").strip()
+    lowered = stderr_text.lower()
+
+    if "sign in to confirm you" in lowered and "not a bot" in lowered:
+        logging.warning(
+            "YouTube blocked the request as a bot check. Configure cookies with "
+            "--cookies /path/to/cookies.txt or TIZ_YTDLP_COOKIES, or use "
+            "--cookies-from-browser / TIZ_YTDLP_COOKIES_FROM_BROWSER when a browser is available."
+        )
+
+    if "no supported javascript runtime" in lowered:
+        logging.warning(
+            "yt-dlp reported that no supported JavaScript runtime is enabled. "
+            "For YouTube, install Deno/Node and pass --js-runtimes or set TIZ_YTDLP_JS_RUNTIMES. "
+            "If you use the pip package, install yt-dlp with extras: pip install -U \"yt-dlp[default]\"."
+        )
+
+    preview = stderr_text[:1200] if stderr_text else "unknown error"
+    logging.warning(f"yt-dlp failed for {url}: {preview}")
+
 
 def download_video(url, output_path, dry_run=False):
     """Download video using yt-dlp."""
@@ -423,29 +597,20 @@ def download_video(url, output_path, dry_run=False):
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-    cmd = [
-        sys.executable, "-m", "yt_dlp",
-        "--no-check-certificates",
-        "-o", output_path,
-        "--merge-output-format", "mp4",
-        "--no-playlist",
-        "--retries", "1",
-        "--fragment-retries", "1",
-        url,
-    ]
+    cmd = build_yt_dlp_cmd(url, output_path)
 
     logging.info(f"Running: {' '.join(cmd)}")
     try:
         if sys.stdout.isatty():
-            result = subprocess.run(cmd, timeout=7200)
+            result = subprocess.run(cmd, text=True, timeout=7200)
         else:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
         if result.returncode == 0:
             logging.info(f"Downloaded successfully: {output_path}")
             return True
         else:
-            stderr = result.stderr[:500] if hasattr(result, "stderr") and result.stderr else "unknown error"
-            logging.warning(f"yt-dlp failed (rc={result.returncode}): {stderr}")
+            stderr = result.stderr if hasattr(result, "stderr") else ""
+            log_yt_dlp_failure(stderr, url)
             return False
     except subprocess.TimeoutExpired:
         logging.error("Download timed out after 2 hours")
@@ -469,15 +634,9 @@ def process_post(session, post, history, dry_run=False):
     race_info = parse_race_info(title, url)
     race_info["date"] = post.get("date", "")
 
-    # Append date to filename if available
+    # Use clean race name for folder/file — Plex reads metadata from .nfo
     file_name = race_info["file_name"]
-    if race_info["date"]:
-        file_name = f"{file_name} ({race_info['date']})"
-
-    # Put airdate in folder name so Plex picks it up
-    folder_name = race_info["folder_name"]
-    if race_info["date"]:
-        folder_name = f"{folder_name} ({race_info['date']})"
+    folder_name = file_name  # folder matches file: "Race Name 2026 - Stage 5"
 
     logging.info(f"Parsed: {folder_name} / {file_name}")
 
@@ -493,15 +652,15 @@ def process_post(session, post, history, dry_run=False):
         logging.info(f"Already in history, skipping: {file_name}")
         return False
 
-    # Extract the direct CDN mp4 URL from the page
-    mp4_url = find_mp4_url(session, url)
-    if not mp4_url:
-        logging.info(f"No CDN video found, skipping: {title}")
+    # Extract the embedded CDN or YouTube video URL from the page
+    video_url = find_video_url(session, url)
+    if not video_url:
+        logging.info(f"No downloadable video source found, skipping: {title}")
         return False
 
-    logging.info(f"Downloading mp4: {mp4_url}")
+    logging.info(f"Downloading video: {video_url}")
     os.makedirs(race_dir, exist_ok=True)
-    downloaded = download_video(mp4_url, output_path, dry_run)
+    downloaded = download_video(video_url, output_path, dry_run)
 
     if downloaded:
         write_nfo(nfo_path, race_info, url, dry_run)
@@ -528,7 +687,7 @@ def process_post(session, post, history, dry_run=False):
 # ---------------------------------------------------------------------------
 
 def main():
-    global OUTPUT_DIR
+    global OUTPUT_DIR, YTDLP_COOKIES, YTDLP_COOKIES_FROM_BROWSER, YTDLP_JS_RUNTIMES, YTDLP_REMOTE_COMPONENTS
 
     parser = argparse.ArgumentParser(
         description="Auto-download full cycling race videos for Plex",
@@ -541,9 +700,13 @@ Examples:
   %(prog)s --output ~/plex/sports # Override output directory
 
 Environment variables:
-  TIZ_OUTPUT_DIR    Output directory (default: ~/media/Cycling)
+  TIZ_OUTPUT_DIR    Output directory (default: ~/files/sports/Cycling)
   TIZ_HISTORY_FILE  Download history JSON (default: ~/.tiz_downloaded.json)
   TIZ_LOG_FILE      Log file path (default: ~/tiz_downloader.log)
+  TIZ_YTDLP_COOKIES Cookie file for YouTube/auth-required hosts
+  TIZ_YTDLP_COOKIES_FROM_BROWSER Browser profile for yt-dlp cookie import
+  TIZ_YTDLP_JS_RUNTIMES JavaScript runtime(s) for yt-dlp (for example: deno)
+  TIZ_YTDLP_REMOTE_COMPONENTS Optional yt-dlp remote components (for example: ejs:github)
         """,
     )
     parser.add_argument("--dry-run", action="store_true", help="Preview without downloading")
@@ -551,15 +714,39 @@ Environment variables:
     parser.add_argument("--url", help="Download a specific race page URL")
     parser.add_argument("--since", type=int, default=7, metavar="DAYS",
                         help="Only check videos from the last N days (default: 7)")
+    parser.add_argument("--cookies", default=YTDLP_COOKIES,
+                        help="Path to a cookies.txt file passed through to yt-dlp")
+    parser.add_argument("--cookies-from-browser", default=YTDLP_COOKIES_FROM_BROWSER,
+                        help="Browser profile passed through to yt-dlp --cookies-from-browser")
+    parser.add_argument("--js-runtimes", default=YTDLP_JS_RUNTIMES,
+                        help="Pass through to yt-dlp --js-runtimes (useful for YouTube)")
+    parser.add_argument("--remote-components", default=YTDLP_REMOTE_COMPONENTS,
+                        help="Pass through to yt-dlp --remote-components (for example ejs:github)")
     args = parser.parse_args()
 
     OUTPUT_DIR = args.output
+    YTDLP_COOKIES = args.cookies
+    YTDLP_COOKIES_FROM_BROWSER = args.cookies_from_browser
+    YTDLP_JS_RUNTIMES = args.js_runtimes
+    YTDLP_REMOTE_COMPONENTS = args.remote_components
 
     setup_logging()
     logging.info("=" * 60)
     logging.info(f"Tiz-Cycling Downloader started at {datetime.now()}")
     if args.dry_run:
         logging.info("DRY RUN MODE - no downloads will occur")
+    if YTDLP_COOKIES:
+        cookies_path = os.path.expanduser(YTDLP_COOKIES)
+        if os.path.exists(cookies_path):
+            logging.info(f"Using yt-dlp cookies file: {cookies_path}")
+        else:
+            logging.warning(f"Configured cookies file not found: {cookies_path}")
+    if YTDLP_COOKIES_FROM_BROWSER:
+        logging.info(f"Using yt-dlp browser cookies: {YTDLP_COOKIES_FROM_BROWSER}")
+    if YTDLP_JS_RUNTIMES:
+        logging.info(f"Using yt-dlp JS runtime(s): {YTDLP_JS_RUNTIMES}")
+    if YTDLP_REMOTE_COMPONENTS:
+        logging.info(f"Using yt-dlp remote components: {YTDLP_REMOTE_COMPONENTS}")
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     history = load_history()
