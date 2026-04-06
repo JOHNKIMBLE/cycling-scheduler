@@ -30,6 +30,7 @@ cookies.txt
 release.sh
 release.ps1
 test.mp4
+Agents.md
 
 # Secrets / credentials
 .env
