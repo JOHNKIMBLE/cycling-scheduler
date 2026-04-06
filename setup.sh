@@ -62,6 +62,8 @@ echo "Installing project files..."
 cp tiz_cycling_downloader.py "$INSTALL_DIR/"
 cp README.md "$INSTALL_DIR/"
 cp AGENTS.md "$INSTALL_DIR/"
+cp setup.sh "$INSTALL_DIR/"
+cp setup.ps1 "$INSTALL_DIR/"
 
 echo "Creating Python venv..."
 python3 -m venv "$VENV_DIR"

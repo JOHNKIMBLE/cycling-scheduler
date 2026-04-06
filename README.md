@@ -1,6 +1,6 @@
 # tiz-cycling-downloader
 
-Auto-download full cycling race videos from [tiz-cycling.tv](https://tiz-cycling.tv) for Plex. Runs on a seedbox or any Linux server with Python 3 and cron.
+Auto-download full cycling race videos from [tiz-cycling.tv](https://tiz-cycling.tv) for Plex. Runs on Linux seedboxes and Windows machines with Python 3.
 
 Default output path: `~/files/sports/Cycling`
 
@@ -29,21 +29,33 @@ Cycling/
 
 ## Quick start
 
+Linux / seedbox:
+
 ```bash
 git clone https://github.com/JOHNKIMBLE/cycling-scheduler.git
 cd cycling-scheduler
 bash setup.sh
 ```
 
-This creates a self-contained install in `~/tiz-downloader` with:
+Windows PowerShell:
+
+```powershell
+git clone https://github.com/JOHNKIMBLE/cycling-scheduler.git
+cd cycling-scheduler
+powershell -ExecutionPolicy Bypass -File .\setup.ps1
+```
+
+Both setup scripts create a self-contained install in `~/tiz-downloader` with:
 
 - a Python venv
 - local `yt-dlp` dependencies
 - a local Deno runtime in `~/tiz-downloader/deno`
-- a generated env file at `~/tiz-downloader/tiz-env.sh`
-- a daily cron job at 6 AM
+- a generated env file at `~/tiz-downloader/tiz-env.sh` on Linux or `~/tiz-downloader/tiz-env.ps1` on Windows
+- a daily scheduler entry at 6 AM
 
 ## Usage
+
+Linux / seedbox:
 
 ```bash
 cd ~/tiz-downloader
@@ -58,12 +70,29 @@ venv/bin/python tiz_cycling_downloader.py --since 3
 # Download a specific race by URL
 venv/bin/python tiz_cycling_downloader.py --url 'https://tiz-cycling.tv/video/e3-saxo-classic-2026-full-race/'
 
-# Override output directory
-venv/bin/python tiz_cycling_downloader.py --output ~/plex/sports/Cycling --since 1
-
 # Download YouTube-backed races with exported browser cookies
 cp ~/youtube-cookies.txt ~/tiz-downloader/youtube-cookies.txt
 venv/bin/python tiz_cycling_downloader.py --since 1
+```
+
+Windows PowerShell:
+
+```powershell
+Set-Location ~/tiz-downloader
+. .\tiz-env.ps1
+
+# Preview what would download from the last day
+.\run-tiz.ps1 -DryRun -Since 1
+
+# Download full races from the last 3 days
+.\run-tiz.ps1 -Since 3
+
+# Download a specific race by URL
+.\run-tiz.ps1 -Url 'https://tiz-cycling.tv/video/e3-saxo-classic-2026-full-race/'
+
+# Download YouTube-backed races with exported browser cookies
+Copy-Item ~/Downloads/youtube-cookies.txt ~/tiz-downloader/youtube-cookies.txt -Force
+.\run-tiz.ps1 -Since 1
 ```
 
 ## Options
@@ -108,8 +137,9 @@ Override defaults without CLI flags:
 - YouTube-backed race pages are supported by extracting the embed URL and handing it to yt-dlp.
 - Some YouTube videos now require cookies and a JS runtime in yt-dlp. If you hit a bot-check error, export a `cookies.txt` file and pass `--cookies ~/youtube-cookies.txt` or set `TIZ_YTDLP_COOKIES`.
 - If YouTube auth is missing or fails, that post is skipped and the script continues. CDN-hosted races will still download normally.
-- `setup.sh` installs a local Deno runtime into the install directory and generates `tiz-env.sh`, so YouTube support no longer depends on shell profile edits.
+- `setup.sh` and `setup.ps1` install a local Deno runtime into the install directory and generate a local env file, so YouTube support no longer depends on shell profile edits.
 - If `~/tiz-downloader/youtube-cookies.txt` exists, the downloader auto-detects it even without `--cookies`.
+- On Windows, `setup.ps1` creates a daily Scheduled Task that runs while your user account is logged in.
 - The site uses Cloudflare, so the script warms up cookies and avoids Brotli encoding.
 - Sitemap responses may return HTTP 404 with valid XML content (Cloudflare quirk) - the script handles this.
 - Rate limiting: 1s delay between sitemap requests, 3s between video downloads.
@@ -122,14 +152,14 @@ If a Tiz page points at YouTube and yt-dlp says `Sign in to confirm you're not a
 2. Log into YouTube in that private window.
 3. In the same tab, open `https://www.youtube.com/robots.txt`.
 4. Export `youtube.com` cookies to a file named `youtube-cookies.txt`.
-5. Copy that file to your seedbox.
+5. Copy that file to the machine running the downloader.
 6. Put it at `~/tiz-downloader/youtube-cookies.txt`.
-7. Run the downloader from the install directory after sourcing `tiz-env.sh`.
+7. Run the downloader from the install directory after loading `tiz-env.sh` or `tiz-env.ps1`.
 
 Example commands:
 
 ```bash
-# Copy cookie file from your local computer to the seedbox
+# Linux / seedbox: copy cookie file from your local computer to the seedbox
 scp ~/Downloads/youtube-cookies.txt treasurefingers@kore:~/youtube-cookies.txt
 
 # On the seedbox, put the cookie file in the install dir and run the downloader
@@ -137,6 +167,15 @@ cd ~/tiz-downloader
 cp ~/youtube-cookies.txt ~/tiz-downloader/youtube-cookies.txt
 . ./tiz-env.sh
 venv/bin/python tiz_cycling_downloader.py --since 1
+```
+
+Windows PowerShell:
+
+```powershell
+Copy-Item ~/Downloads/youtube-cookies.txt ~/tiz-downloader/youtube-cookies.txt -Force
+Set-Location ~/tiz-downloader
+. .\tiz-env.ps1
+.\run-tiz.ps1 -Since 1
 ```
 
 If you want to test yt-dlp directly with the contained runtime, use:
@@ -159,13 +198,13 @@ Tips:
 ## Requirements
 
 - Python 3.8+
-- Linux/macOS (seedbox, VPS, etc.)
-- cron (for automated daily runs)
+- Linux/macOS or Windows
+- cron on Linux or Task Scheduler on Windows for automated daily runs
 - ~5-10 GB free per race (full races are typically 3-8 GB)
 
 ## Dependencies
 
-Installed automatically by `setup.sh`:
+Installed automatically by `setup.sh` / `setup.ps1`:
 
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) with the `default` extras - video download and bundled EJS support files
 - [requests](https://docs.python-requests.org/) - HTTP client

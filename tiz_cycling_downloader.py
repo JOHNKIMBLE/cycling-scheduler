@@ -42,8 +42,14 @@ def detect_local_cookie_file():
 
 def detect_local_js_runtime():
     """Use a colocated Deno runtime when available."""
-    deno_path = SCRIPT_DIR / "deno" / "bin" / "deno"
-    return f"deno:{deno_path}" if deno_path.exists() else ""
+    candidates = [
+        SCRIPT_DIR / "deno" / "bin" / "deno",
+        SCRIPT_DIR / "deno" / "bin" / "deno.exe",
+    ]
+    for deno_path in candidates:
+        if deno_path.exists():
+            return f"deno:{deno_path}"
+    return ""
 
 
 SITE_URL = os.environ.get("TIZ_SITE_URL", "https://tiz-cycling.tv")
