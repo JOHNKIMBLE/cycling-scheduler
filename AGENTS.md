@@ -83,6 +83,18 @@ Linux/seedbox bootstrap script. It:
 - generates `tiz-env.sh` inside the install directory
 - creates or updates a daily cron job
 
+### [`setup.ps1`](/c:/Users/Conno/Desktop/Projects/tiz-cycling-downloader/setup.ps1)
+
+Windows bootstrap script. It:
+
+- creates the install directory and output directory
+- copies the Python script and onboarding docs into the install directory
+- creates a virtualenv
+- installs Python dependencies
+- installs a local Deno runtime inside the install directory
+- generates `tiz-env.ps1` and `run-tiz.ps1` inside the install directory
+- creates or updates a daily Scheduled Task
+
 ### [`README.md`](/c:/Users/Conno/Desktop/Projects/tiz-cycling-downloader/README.md)
 
 User-facing overview and quick start. Keep this shorter and task-focused.
@@ -223,15 +235,15 @@ This is intentionally lightweight. The downloader is not trying to be a full met
 
 ### Expected environment
 
-Primary target is a Linux seedbox or VPS with:
+Primary targets are:
 
-- Python 3.8+
-- cron
+- Linux seedboxes or VPS machines with Python 3.8+ and cron
+- Windows machines with Python 3.8+ and Task Scheduler
 - enough disk for large race videos
 
 ### Installed dependencies
 
-`setup.sh` currently installs:
+`setup.sh` / `setup.ps1` currently install:
 
 - `yt-dlp[default]`
 - `requests`
@@ -247,7 +259,10 @@ Important note:
 
 ### Generated env file
 
-`setup.sh` now writes `<install dir>/tiz-env.sh`.
+The setup scripts now write a local env file:
+
+- `<install dir>/tiz-env.sh` on Linux
+- `<install dir>/tiz-env.ps1` on Windows
 
 That file is the supported way to load the contained runtime environment:
 
@@ -255,6 +270,8 @@ That file is the supported way to load the contained runtime environment:
 - exports `TIZ_OUTPUT_DIR`
 - exports `TIZ_YTDLP_JS_RUNTIMES` pointing at the local Deno binary
 - keeps YouTube cookie handling simple by expecting `youtube-cookies.txt` to live next to the script
+
+On Windows, `setup.ps1` also writes `<install dir>/run-tiz.ps1` as the normal entrypoint for manual runs and the Scheduled Task.
 
 ### YouTube auth/runtime knobs
 
@@ -273,9 +290,12 @@ In the current setup model, the easiest path is:
 - place `youtube-cookies.txt` in the install directory
 - let the script auto-detect that cookie file and the local Deno runtime
 
-### Cron model
+### Scheduler model
 
-The setup script writes a daily cron job that runs the downloader with `--since 1`.
+The setup scripts create a daily automation entry that runs the downloader with `--since 1`:
+
+- cron on Linux
+- Scheduled Task on Windows
 
 That means the normal production model is incremental:
 
@@ -308,7 +328,7 @@ If the install directory contains these files, the script will auto-use them whe
 - `youtube-cookies.txt`
 - `deno/bin/deno`
 
-This is deliberate. It keeps the seedbox setup contained to one folder.
+This is deliberate. It keeps the install contained to one folder on both Linux and Windows.
 
 ### There are no automated tests yet
 
@@ -354,6 +374,7 @@ Current design decisions that should remain true unless intentionally changed:
 - keep history idempotency simple and page-URL-based
 - prefer simple heuristics over heavy parsing unless the site changes enough to force it
 - keep the install self-contained under the install directory, including the Deno runtime
+- keep Linux and Windows setup parity where practical so onboarding stays simple
 
 ## Fast Onboarding Checklist
 
@@ -364,7 +385,7 @@ If you are new to this repo, read in this order:
 3. [`tiz_cycling_downloader.py`](/c:/Users/Conno/Desktop/Projects/tiz-cycling-downloader/tiz_cycling_downloader.py)
 4. the `process_post()` function
 5. the `find_video_url()` and related helper functions
-6. `setup.sh`
+6. `setup.sh` or `setup.ps1` for the target platform
 
 If something breaks in production, start with:
 
