@@ -68,9 +68,18 @@ cp setup.ps1 "$INSTALL_DIR/"
 echo "Creating Python venv..."
 python3 -m venv "$VENV_DIR"
 
+# yt-dlp needs Python 3.10+. On an older interpreter pip quietly resolves to a
+# stale yt-dlp that can no longer download from YouTube, so stop here instead.
+if ! "$VENV_DIR/bin/python" -c 'import sys; sys.exit(sys.version_info < (3, 10))'; then
+    echo "ERROR: Python 3.10+ is required (venv has $("$VENV_DIR/bin/python" -V 2>&1))." >&2
+    echo "Install a newer python3, delete $VENV_DIR, and re-run setup." >&2
+    exit 1
+fi
+
 echo "Installing Python dependencies..."
 "$VENV_DIR/bin/pip" install --quiet --upgrade pip
-"$VENV_DIR/bin/pip" install --quiet "yt-dlp[default]" requests beautifulsoup4 lxml
+# --upgrade so re-running setup also refreshes yt-dlp, which must track YouTube changes.
+"$VENV_DIR/bin/pip" install --quiet --upgrade "yt-dlp[default]" requests beautifulsoup4 lxml
 echo "Installed: yt-dlp[default], requests, beautifulsoup4, lxml"
 
 install_deno
