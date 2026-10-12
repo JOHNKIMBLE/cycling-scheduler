@@ -21,7 +21,7 @@ function Get-PythonLauncher {
     if (Get-Command python -ErrorAction SilentlyContinue) {
         return @("python")
     }
-    throw "Python 3 was not found in PATH. Install Python 3.8+ first."
+    throw "Python 3 was not found in PATH. Install Python 3.10+ first."
 }
 
 function Install-LocalDeno {
@@ -159,9 +159,17 @@ $venvArgs += @("-m", "venv", $VenvDir)
 Write-Host "Creating Python venv..."
 & $pythonLauncher[0] @venvArgs
 
+# yt-dlp needs Python 3.10+. On an older interpreter pip quietly resolves to a
+# stale yt-dlp that can no longer download from YouTube, so stop here instead.
+& $PythonExe -c "import sys; sys.exit(sys.version_info < (3, 10))"
+if ($LASTEXITCODE -ne 0) {
+    throw "Python 3.10+ is required (venv has $(& $PythonExe -V 2>&1)). Install a newer Python, delete $VenvDir, and re-run setup."
+}
+
 Write-Host "Installing Python dependencies..."
 & $PipExe install --quiet --upgrade pip
-& $PipExe install --quiet "yt-dlp[default]" requests beautifulsoup4 lxml
+# --upgrade so re-running setup also refreshes yt-dlp, which must track YouTube changes.
+& $PipExe install --quiet --upgrade "yt-dlp[default]" requests beautifulsoup4 lxml
 Write-Host "Installed: yt-dlp[default], requests, beautifulsoup4, lxml"
 
 Install-LocalDeno

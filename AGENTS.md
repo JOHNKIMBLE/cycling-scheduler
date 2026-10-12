@@ -237,8 +237,8 @@ This is intentionally lightweight. The downloader is not trying to be a full met
 
 Primary targets are:
 
-- Linux seedboxes or VPS machines with Python 3.8+ and cron
-- Windows machines with Python 3.8+ and Task Scheduler
+- Linux seedboxes or VPS machines with Python 3.10+ and cron
+- Windows machines with Python 3.10+ and Task Scheduler
 - enough disk for large race videos
 
 ### Installed dependencies

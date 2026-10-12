@@ -197,7 +197,7 @@ Tips:
 
 ## Requirements
 
-- Python 3.8+
+- Python 3.10+ (required by current yt-dlp)
 - Linux/macOS or Windows
 - cron on Linux or Task Scheduler on Windows for automated daily runs
 - ~5-10 GB free per race (full races are typically 3-8 GB)
